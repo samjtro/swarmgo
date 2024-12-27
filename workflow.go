@@ -40,6 +40,9 @@ const (
 	ContinueOnCycle
 )
 
+// WorkflowInstruction represents a function for the Workflow to execute
+type WorkflowInstruction func(opts ...any) (*WorkflowResult, error)
+
 // Workflow represents a collection of agents and their connections.
 type Workflow struct {
 	swarm          *Swarm
@@ -57,6 +60,7 @@ type Workflow struct {
 	stepResults    []StepResult      // Track results of each step
 	currentStep    int              // Current step number
 	visualHook     VisualizationHook // Add visualization hook
+	instructions   map[string]WorkflowInstruction
 }
 
 // VisualizationHook defines the interface for workflow visualization
@@ -83,6 +87,7 @@ func NewWorkflow(apikey string, provider llm.LLMProvider, workflowType WorkflowT
 		teamLeaders:   make(map[TeamType]string),
 		routingLog:    make([]string, 0),
 		cycleHandling: StopOnCycle,
+		instructions:  make(map[string]WorkflowInstruction),
 	}
 }
 
@@ -94,6 +99,16 @@ func (wf *Workflow) SetCycleCallback(callback func(from, to string) (bool, error
 // SetCycleHandling sets how cycles should be handled
 func (wf *Workflow) SetCycleHandling(handling CycleHandling) {
 	wf.cycleHandling = handling
+}
+
+// SetInstruction sets wf.instructions[name] to the given WorkflowInstruction
+func (wf *Workflow) SetInstruction(name string, i WorkflowInstruction) {
+	wf.instructions[name] = i
+}
+
+// SetSwarm sets wf.swarm to the given *Swarm
+func (wf *Workflow) SetSwarm(swarm *Swarm) {
+	wf.swarm = swarm
 }
 
 // SetVisualizationHook sets the visualization hook for the workflow
@@ -138,6 +153,11 @@ func (wf *Workflow) GetTeamLeaders() map[TeamType]string {
 	return wf.teamLeaders
 }
 
+// GetInstruction returns the instruction at the given key
+func (wf *Workflow) GetInstruction(key string) WorkflowInstruction {
+	return wf.instructions[key]
+}
+
 // AddAgent adds an agent to the workflow.
 func (wf *Workflow) AddAgent(agent *Agent) {
 	wf.agents[agent.Name] = agent
@@ -160,7 +180,17 @@ func (wf *Workflow) SetTeamLeader(agentName string, team TeamType) error {
 	return nil
 }
 
-// Execute runs the workflow and returns detailed results including step outcomes
+// execute runs the given WorkflowInstruction
+func (wf *Workflow) execute(i WorkflowInstruction) (*WorkflowResult, error) {
+	return i()
+}
+
+// Run runs the WorkflowInstruction stored at instructions[key], returns results
+func (wf *Workflow) Run(key string) (*WorkflowResult, error) {
+	return wf.execute(wf.instructions[key])
+}
+
+// Execute runs a workflow and returns detailed results including step outcomes
 func (wf *Workflow) Execute(startAgent string, userRequest string) (*WorkflowResult, error) {
 	result := &WorkflowResult{
 		Steps:     make([]StepResult, 0),
@@ -201,7 +231,7 @@ func (wf *Workflow) Execute(startAgent string, userRequest string) (*WorkflowRes
 		fmt.Printf("\033[96mExecuting agent: %s (Step %d)\033[0m\n", wf.currentAgent, stepResult.StepNumber)
 		response, err := wf.executeAgent(wf.currentAgent, messageHistory)
 		stepResult.EndTime = time.Now()
-		
+
 		// Notify visualization of agent completion
 		if wf.visualHook != nil {
 			wf.visualHook.OnAgentComplete(wf.currentAgent, stepResult.StepNumber, stepResult.EndTime.Sub(stepResult.StartTime))
